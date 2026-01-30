@@ -858,7 +858,7 @@ def generate_html(title: str, content: str, blocks: List[Block], server_port: in
             const renderedContent = document.getElementById('rendered-content');
             const floatingToolbar = document.getElementById('floating-toolbar');
 
-            console.log('Setting up text selection handler...', {{ renderedContent: !!renderedContent, floatingToolbar: !!floatingToolbar }});
+            // console.log('Setting up text selection handler...', {{ renderedContent: !!renderedContent, floatingToolbar: !!floatingToolbar }});
 
             renderedContent.addEventListener('mouseup', (e) => {{
                 // Delay to let selection finalize
@@ -866,7 +866,7 @@ def generate_html(title: str, content: str, blocks: List[Block], server_port: in
                     const selection = window.getSelection();
                     const text = selection.toString().trim();
 
-                    console.log('Selection detected:', text ? `"${{text.substring(0, 30)}}..."` : '(empty)');
+                    // console.log('Selection detected:', text ? `"${{text.substring(0, 30)}}..."` : '(empty)');
 
                     if (text && text.length > 0) {{
                         selectedText = text;
@@ -878,7 +878,7 @@ def generate_html(title: str, content: str, blocks: List[Block], server_port: in
                             const top = rect.bottom + 8;
                             const left = Math.max(10, rect.left + (rect.width / 2) - 50);
 
-                            console.log('Showing toolbar at:', top, left);
+                            // console.log('Showing toolbar at:', top, left);
 
                             floatingToolbar.style.top = `${{top}}px`;
                             floatingToolbar.style.left = `${{left}}px`;
@@ -995,7 +995,7 @@ def generate_html(title: str, content: str, blocks: List[Block], server_port: in
 
             renderComments();
 
-            console.log('Comment added:', comment);
+            // console.log('Comment added:', comment);
         }}
 
         // Setup inline comment input handlers
@@ -1313,15 +1313,15 @@ def generate_html(title: str, content: str, blocks: List[Block], server_port: in
         }}
 
         function deleteComment(commentId) {{
-            // Remove highlight from preview if it's a text comment
-            const highlightedSpan = document.querySelector(`.commented-text[data-comment-id="${{commentId}}"]`);
-            if (highlightedSpan) {{
-                const parent = highlightedSpan.parentNode;
-                while (highlightedSpan.firstChild) {{
-                    parent.insertBefore(highlightedSpan.firstChild, highlightedSpan);
+            // Remove all highlight spans from preview if it's a text comment
+            const highlightedSpans = document.querySelectorAll(`.commented-text[data-comment-id="${{commentId}}"]`);
+            highlightedSpans.forEach(span => {{
+                const parent = span.parentNode;
+                while (span.firstChild) {{
+                    parent.insertBefore(span.firstChild, span);
                 }}
-                parent.removeChild(highlightedSpan);
-            }}
+                parent.removeChild(span);
+            }});
 
             comments = comments.filter(c => c.id !== commentId);
             renderComments();
