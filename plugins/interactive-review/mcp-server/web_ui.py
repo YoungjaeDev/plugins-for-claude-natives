@@ -8,7 +8,7 @@ Uses marked.js for markdown rendering.
 
 import json
 from typing import List, Dict, Any
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 
 @dataclass
@@ -19,6 +19,33 @@ class Block:
     text: str
     level: int = 0  # for headings
     raw: str = ""  # original markdown
+
+
+@dataclass
+class DocumentState:
+    """Memory-efficient document storage using line offsets instead of per-line objects."""
+    raw_content: str
+    _line_offsets: List[int] = field(default_factory=list)
+
+    def __post_init__(self):
+        self._line_offsets = [0]
+        for i, char in enumerate(self.raw_content):
+            if char == '\n':
+                self._line_offsets.append(i + 1)
+
+    def get_line(self, index: int) -> str:
+        if index < 0 or index >= self.line_count:
+            raise IndexError(f"Line index {index} out of range")
+        start = self._line_offsets[index]
+        if index + 1 < len(self._line_offsets):
+            end = self._line_offsets[index + 1] - 1
+        else:
+            end = len(self.raw_content)
+        return self.raw_content[start:end]
+
+    @property
+    def line_count(self) -> int:
+        return len(self._line_offsets)
 
 
 def parse_markdown(content: str) -> List[Block]:
@@ -821,6 +848,9 @@ def generate_html(title: str, content: str, blocks: List[Block], server_port: in
 
             // Setup text selection handler for preview
             setupTextSelectionHandler();
+
+            // Setup event delegation for source view (performance optimization)
+            setupSourceViewEventDelegation();
         }}
 
         // Text selection in Preview view
@@ -868,6 +898,37 @@ def generate_html(title: str, content: str, blocks: List[Block], server_port: in
                     hideFloatingToolbar();
                 }}
             }});
+        }}
+
+        function setupSourceViewEventDelegation() {{
+            const sourceView = document.getElementById('source-view');
+
+            // Single mousedown handler for all line interactions
+            sourceView.addEventListener('mousedown', (e) => {{
+                const wrapper = e.target.closest('.line-wrapper');
+                if (!wrapper) return;
+
+                const index = parseInt(wrapper.dataset.lineIndex, 10);
+
+                // Handle add-comment button click
+                if (e.target.matches('.add-comment-btn') || e.target.closest('.add-comment-btn')) {{
+                    e.stopPropagation();
+                    quickAddComment(index);
+                    return;
+                }}
+
+                // Start line selection
+                startLineSelection(index);
+            }});
+
+            // Mouseenter for extending selection (use capture for better performance)
+            sourceView.addEventListener('mouseenter', (e) => {{
+                const wrapper = e.target.closest('.line-wrapper');
+                if (wrapper && isSelecting) {{
+                    const index = parseInt(wrapper.dataset.lineIndex, 10);
+                    extendLineSelection(index);
+                }}
+            }}, true);
         }}
 
         function hideFloatingToolbar() {{
@@ -958,18 +1019,102 @@ def generate_html(title: str, content: str, blocks: List[Block], server_port: in
         }}
 
         function highlightTextInPreview(range, commentId) {{
-            if (!range) return;
+            if (!range) return null;
 
-            try {{
+            const textNodes = getTextNodesInRange(range);
+            if (textNodes.length === 0) {{
+                // Fallback: try original surroundContents
+                try {{
+                    const span = document.createElement('span');
+                    span.className = 'commented-text';
+                    span.dataset.commentId = commentId;
+                    span.onclick = () => scrollToComment(commentId);
+                    range.surroundContents(span);
+                    return [span];
+                }} catch (e) {{
+                    console.log('Could not highlight selection:', e);
+                    return null;
+                }}
+            }}
+
+            const highlights = [];
+
+            textNodes.forEach((node, index) => {{
+                const nodeRange = document.createRange();
+
+                // First node: start from selection startOffset
+                if (index === 0) {{
+                    nodeRange.setStart(node, Math.min(range.startOffset, node.length));
+                }} else {{
+                    nodeRange.setStart(node, 0);
+                }}
+
+                // Last node: end at selection endOffset
+                if (index === textNodes.length - 1) {{
+                    nodeRange.setEnd(node, Math.min(range.endOffset, node.length));
+                }} else {{
+                    nodeRange.setEnd(node, node.length);
+                }}
+
+                // Skip empty ranges
+                if (nodeRange.toString().length === 0) return;
+
                 const span = document.createElement('span');
                 span.className = 'commented-text';
                 span.dataset.commentId = commentId;
+                span.dataset.highlightGroup = commentId;
                 span.onclick = () => scrollToComment(commentId);
-                range.surroundContents(span);
-            }} catch (e) {{
-                // If surroundContents fails (crosses element boundaries), skip highlighting
-                console.log('Could not highlight selection:', e);
+
+                try {{
+                    nodeRange.surroundContents(span);
+                    highlights.push(span);
+                }} catch (e) {{
+                    console.warn('Highlight failed for node:', e);
+                }}
+            }});
+
+            return highlights.length > 0 ? highlights : null;
+        }}
+
+        function getTextNodesInRange(range) {{
+            const textNodes = [];
+
+            // Handle case where commonAncestorContainer is a text node
+            const container = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+                ? range.commonAncestorContainer.parentNode
+                : range.commonAncestorContainer;
+
+            const walker = document.createTreeWalker(
+                container,
+                NodeFilter.SHOW_TEXT,
+                {{
+                    acceptNode: (node) => {{
+                        // Skip empty text nodes
+                        if (!node.textContent.trim() && node.textContent.length === 0) {{
+                            return NodeFilter.FILTER_REJECT;
+                        }}
+
+                        const nodeRange = document.createRange();
+                        nodeRange.selectNodeContents(node);
+
+                        // Check if node overlaps with selection range
+                        const startsBeforeEnd = range.compareBoundaryPoints(Range.END_TO_START, nodeRange) <= 0;
+                        const endsAfterStart = range.compareBoundaryPoints(Range.START_TO_END, nodeRange) >= 0;
+
+                        if (startsBeforeEnd && endsAfterStart) {{
+                            return NodeFilter.FILTER_ACCEPT;
+                        }}
+                        return NodeFilter.FILTER_REJECT;
+                    }}
+                }}
+            );
+
+            let node;
+            while ((node = walker.nextNode())) {{
+                textNodes.push(node);
             }}
+
+            return textNodes;
         }}
 
         function scrollToComment(commentId) {{
@@ -984,18 +1129,16 @@ def generate_html(title: str, content: str, blocks: List[Block], server_port: in
         function renderSourceView() {{
             const container = document.getElementById('source-view');
             container.innerHTML = lines.map((line, index) => {{
-                const hasComment = comments.some(c => index >= c.startLine && index <= c.endLine);
+                const hasComment = comments.some(c => c.type === 'line' && index >= c.startLine && index <= c.endLine);
                 const isSelecting = selectionStart !== null &&
                     index >= Math.min(selectionStart, selectionEnd || selectionStart) &&
                     index <= Math.max(selectionStart, selectionEnd || selectionStart);
 
                 return `
                     <div class="line-wrapper ${{hasComment ? 'has-comment' : ''}} ${{isSelecting ? 'selecting' : ''}}"
-                         data-line="${{index}}"
-                         onmousedown="startLineSelection(${{index}})"
-                         onmouseenter="extendLineSelection(${{index}})">
-                        <button class="add-comment-btn" onclick="event.stopPropagation(); quickAddComment(${{index}})" title="Add comment">+</button>
-                        <div class="line-number" data-line="${{index}}">${{index + 1}}</div>
+                         data-line-index="${{index}}">
+                        <button class="add-comment-btn" data-action="add-comment" title="Add comment">+</button>
+                        <div class="line-number">${{index + 1}}</div>
                         <div class="line-content">${{escapeHtml(line.text) || '&nbsp;'}}</div>
                     </div>
                 `;
